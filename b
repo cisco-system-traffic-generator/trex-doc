@@ -1,5 +1,8 @@
 #! /bin/bash
 
+echo Repository is deprecated, please use 'doc' directory of trex-core.
+exit 1
+
 waf=waf-1.9.3
 p2=${PYTHON:-${PYTHON2:-python2.7}}
 
