@@ -87,11 +87,13 @@ but for binary payload, value object should be used
 ----
 - int/long/str - they can de specified directly as a value of a field
 - {"vtype": "BYTES", "base64": "my_payload_base64"} - binary payload passed as base64
+- {"vtype": "BYTES", "generate": ... } - generate bytes payload. see below
 - {"vtype": "EXPRESSION", "expr": "TCPOptions()"} - python expression(normally, should be avoided)
 - {"vtype": "UNDEFINED"} - unset field value, and let it be assigned automatically
 - {"vtype": "RANDOM"} - assign a random value to a field
 ----
 
+==== Binary payload example
 Example of object value usage(to specify binary payload)
 ----
 Ether()/IP()/TCP()/Raw(load=my_payload)
@@ -111,6 +113,36 @@ Ether()/IP()/TCP()/Raw(load=my_payload)
         ]}
 ]
 ----
+
+==== Generating binary payload
+
+[source,python]
+----
+# generate 64 bytes of printable ascii payload
+# seed is optional number to define a pseudo-random number sequence
+- {"vtype": "BYTES", "generate": "random_ascii", "size": 64, "seed": 12345}
+
+# generate 32 bytes(from 0 to 0xFF bytes), using default seed value
+- {"vtype": "BYTES", "generate": "random_bytes", "size": 32}
+
+# generate 32 bytes using repeating/cut specified template
+- {"vtype": "BYTES", "generate": "template", "size": 32, template_base64: "<base64 string>"}
+
+# same as generate from template, but template is specified with a hex string
+# spaces and 0x are ignored. only 2 character hex values currently allowed
+- {"vtype": "BYTES", "generate": "template_code", "size": 8, template_code: "DE AD BE EF 13 10"}
+
+# generates payload from hex values. for this case size can be omitted(it will be calculated automatically)
+- {"vtype": "BYTES", "generate": "template_code", template_code: "DE AD BE EF 13 10"}
+
+# generate random bytes to fill the packet size to 128 bytes
+# you can also replace 'size' parameter with a 'total_size' in any examples above.
+# generator size or total_size parameter to be specified.
+#There should be no multiple payloads with total_size
+- {"vtype": "BYTES", "generate": "random_bytes", "total_size": 128}
+----
+
+
 
 === Scapy packet result payload [[build_pkt_output]]
 build_pkt and reconstruct pkt take packet model and produce result JSON,
@@ -817,6 +849,7 @@ Notice:
 
 * The Server's IP will be the IP address of the local host.
 * The Server will accept requests from *any* IP address on that port.
+* You should NOT run scapy_server as root - use a user with a limited access
 
 [source,bash]
 ----
@@ -860,8 +893,95 @@ There are 2 ways to shut down the server:
 Server: Shut down by remote user
 ----
 
+You may need to support custom structures
+* The server can be shut down using the keyboard interrupt Ctrl+C
+* The server can be shut down remotely with the method "shut_down" with no arguments
+
+[source,bash]
+----
+//Sending Request: {"params": [], "jsonrpc": "2.0", "method": "shut_down", "id": "1"}
+//Will result in this print by the server:
+Server: Shut down by remote user
+----
+
+=== Extending Scapy Server
+Scapy Server can automatically generate definition from Scapy classes.
+
+==== Extending UI definitions
+protocols.json file in a scapy_server directory defines look&feel for UI for particular protocols and fields.
+By modifying it you can
+- alter field/protocol labels and enums
+- add field value restriction(min/max for numbers, regular expressions)
+- change how the filed will be rendered( type: NUMBER/BYTES/STRING/ENUM/EXPRESSION etc...)
+- add enums to display possible choices in a UI
+
+Examples:
+[source,python]
+----
+# add a restriction for VXLAN.vni to accept only '1' or '7' strings using regular expression
+{
+    "id": "VXLAN",
+    "fields": [
+        { "id": "vni", "regex": "^[17]$" }
+    ]
+}
+
+# as an alternative, we can use an enum, which suggests possible values, but does not limit them(so any value can be entered)
+{
+    "id": "VXLAN",
+        "fields": [
+        {
+            "id": "vni",
+            "values_dict": {
+                "1": 1,
+                "7": 7
+            }
+        }
+        ]
+}
+
+# limit TCP.sport values to a number range of 0-65535
+{
+    "id": "TCP",
+        "fields": [
+        {
+            "id": "sport",
+            "name": "Source port",
+            "type": "NUMBER",
+            "min": 0,
+            "max": 65535
+        }
+        ]
+}
+
+----
+
+==== Adding new procotols support
+You can also extend the Scapy server by adding new Scapy classes.
+All loaded Scapy classes derived from scapy.all.Packet will appear in the Scapy Server, so you can create and load your extension modules. New classes can also be tweaked using 'protocols.json. file
+
+Example:
+[source,python]
+----
+# scapy_extensions.py
+# this file needs to be included into a scapy_service.py
+_VXLAN_FLAGS = ['R' for i in range(0, 24)] + ['R', 'R', 'R', 'I', 'R', 'R', 'R', 'R', 'R']
+
+class MY11ThreeBytesField(X3BytesField, ByteField):
+    def i2repr(self, pkt, x):
+        return ByteField.i2repr(self, pkt, x)
 
 
+class VXLAN(Packet):
+    name = "VXLAN"
+    fields_desc = [FlagsField("flags", 0x08000000, 32, _VXLAN_FLAGS),
+                   MY11ThreeBytesField("vni", 0),
+                   XByteField("reserved", 0x00)]
 
+    def mysummary(self):
+        return self.sprintf("VXLAN (vni=%VXLAN.vni%)")
 
+bind_layers(UDP, VXLAN, dport=4789)
+bind_layers(VXLAN, Ether)
+----
 
