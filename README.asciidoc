@@ -1,5 +1,0 @@
-
-== moved to trex-core/doc folder 
-
-
-
